@@ -153,10 +153,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    println!(
-        "Listening on 0.0.0.0:{} → https://{}",
-        port, redirect_host
-    );
+    println!("Listening on 0.0.0.0:{} → https://{}", port, redirect_host);
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -235,10 +232,7 @@ mod tests {
     #[tokio::test]
     async fn handle_defaults_to_root_when_no_path_and_query() {
         let config = make_config("example.com", None, 301);
-        let req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
         let resp = handle(State(config), req).await;
 
         assert_eq!(
@@ -250,7 +244,11 @@ mod tests {
     #[tokio::test]
     async fn handle_uses_path_and_query_not_full_uri() {
         let config = make_config("target.com", None, 307);
-        let resp = handle(State(config), make_request("http://origin.com/path?key=val")).await;
+        let resp = handle(
+            State(config),
+            make_request("http://origin.com/path?key=val"),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(

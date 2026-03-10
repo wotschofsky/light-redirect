@@ -5,9 +5,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal"] }
-hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
+axum = "0.8"
 
 [profile.release]
 opt-level = "z"

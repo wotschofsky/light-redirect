@@ -1,13 +1,10 @@
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use http_body_util::Empty;
-use hyper::body::Bytes;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use axum::body::Body;
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, Response, StatusCode, Uri};
+use axum::Router;
 use tokio::net::TcpListener;
 
 struct Config {
@@ -32,18 +29,14 @@ fn resolve_code(raw: &str) -> Result<u16, String> {
     }
 }
 
-async fn handle<B>(
-    req: Request<B>,
-    config: Arc<Config>,
-) -> Result<Response<Empty<Bytes>>, Infallible> {
+async fn handle(State(config): State<Arc<Config>>, req: Request) -> Response<Body> {
     if let Some(ref health_path) = config.health_path {
         if req.uri().path() == health_path {
-            let response = Response::builder()
+            return Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Length", "0")
-                .body(Empty::new())
+                .body(Body::empty())
                 .expect("health response must be valid");
-            return Ok(response);
         }
     }
 
@@ -67,7 +60,7 @@ async fn handle<B>(
         .status(status)
         .header("Location", &location)
         .header("Content-Length", "0")
-        .body(Empty::new())
+        .body(Body::empty())
     {
         Ok(resp) => resp,
         Err(e) => {
@@ -75,7 +68,7 @@ async fn handle<B>(
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .header("Content-Length", "0")
-                .body(Empty::new())
+                .body(Body::empty())
                 .expect("fallback response must be valid")
         }
     };
@@ -88,7 +81,7 @@ async fn handle<B>(
         config.redirect_code
     );
 
-    Ok(response)
+    response
 }
 
 #[tokio::main]
@@ -98,9 +91,8 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // Validate that redirect_host produces a valid Location header value
     let test_location = format!("https://{}/", redirect_host);
-    if hyper::header::HeaderValue::from_str(&test_location).is_err() {
+    if HeaderValue::from_str(&test_location).is_err() {
         eprintln!(
             "Error: SERVER_REDIRECT contains invalid characters for a Location header: {}",
             redirect_host
@@ -110,14 +102,13 @@ async fn main() {
 
     let redirect_path = std::env::var("SERVER_REDIRECT_PATH").ok();
 
-    // Validate that redirect_path starts with '/' and produces a valid header value
     if let Some(ref path) = redirect_path {
         if !path.starts_with('/') {
             eprintln!("Error: SERVER_REDIRECT_PATH must start with '/': {}", path);
             std::process::exit(1);
         }
         let test_location = format!("https://{}{}", redirect_host, path);
-        if hyper::header::HeaderValue::from_str(&test_location).is_err() {
+        if HeaderValue::from_str(&test_location).is_err() {
             eprintln!(
                 "Error: SERVER_REDIRECT_PATH contains invalid characters for a Location header: {}",
                 path
@@ -154,6 +145,8 @@ async fn main() {
         health_path,
     });
 
+    let app = Router::new().fallback(handle).with_state(config);
+
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
         eprintln!("Error: failed to bind to {}: {}", addr, e);
@@ -165,44 +158,21 @@ async fn main() {
         port, redirect_host
     );
 
-    let shutdown = tokio::signal::ctrl_c();
-    tokio::pin!(shutdown);
-
-    loop {
-        tokio::select! {
-            result = listener.accept() => {
-                let (stream, _) = match result {
-                    Ok(conn) => conn,
-                    Err(e) => {
-                        eprintln!("Accept error: {}", e);
-                        continue;
-                    }
-                };
-
-                let io = TokioIo::new(stream);
-                let config = Arc::clone(&config);
-
-                tokio::task::spawn(async move {
-                    if let Err(e) = http1::Builder::new()
-                        .serve_connection(io, service_fn(move |req| handle(req, Arc::clone(&config))))
-                        .await
-                    {
-                        eprintln!("Connection error: {}", e);
-                    }
-                });
-            }
-            _ = &mut shutdown => {
-                println!("Shutting down gracefully...");
-                break;
-            }
-        }
-    }
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            println!("Shutting down gracefully...");
+        })
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("Server error: {}", e);
+            std::process::exit(1);
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyper::Uri;
 
     #[test]
     fn resolve_code_valid_codes() {
@@ -231,18 +201,17 @@ mod tests {
         })
     }
 
-    fn make_request(uri: &str) -> Request<Empty<Bytes>> {
+    fn make_request(uri: &str) -> Request {
         Request::builder()
             .uri(uri.parse::<Uri>().unwrap())
-            .body(Empty::new())
+            .body(Body::empty())
             .unwrap()
     }
 
     #[tokio::test]
     async fn handle_redirects_to_host_with_path() {
         let config = make_config("example.com", None, 301);
-        let req = make_request("/foo/bar?q=1");
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), make_request("/foo/bar?q=1")).await;
 
         assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
         assert_eq!(
@@ -254,8 +223,7 @@ mod tests {
     #[tokio::test]
     async fn handle_uses_configured_redirect_path() {
         let config = make_config("example.com", Some("/fixed"), 302);
-        let req = make_request("/ignored");
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), make_request("/ignored")).await;
 
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
@@ -269,9 +237,9 @@ mod tests {
         let config = make_config("example.com", None, 301);
         let req = Request::builder()
             .uri("/")
-            .body(Empty::<Bytes>::new())
+            .body(Body::empty())
             .unwrap();
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), req).await;
 
         assert_eq!(
             resp.headers().get("Location").unwrap(),
@@ -282,8 +250,7 @@ mod tests {
     #[tokio::test]
     async fn handle_uses_path_and_query_not_full_uri() {
         let config = make_config("target.com", None, 307);
-        let req = make_request("http://origin.com/path?key=val");
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), make_request("http://origin.com/path?key=val")).await;
 
         assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
@@ -302,8 +269,7 @@ mod tests {
             (308, StatusCode::PERMANENT_REDIRECT),
         ] {
             let config = make_config("example.com", None, code);
-            let req = make_request("/");
-            let resp = handle(req, config).await.unwrap();
+            let resp = handle(State(config), make_request("/")).await;
             assert_eq!(resp.status(), expected);
         }
     }
@@ -311,8 +277,7 @@ mod tests {
     #[tokio::test]
     async fn handle_sets_content_length_zero() {
         let config = make_config("example.com", None, 301);
-        let req = make_request("/");
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), make_request("/")).await;
 
         assert_eq!(resp.headers().get("Content-Length").unwrap(), "0");
     }
@@ -325,8 +290,7 @@ mod tests {
             redirect_code: 301,
             health_path: Some("/healthz".to_string()),
         });
-        let req = make_request("/healthz");
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), make_request("/healthz")).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(resp.headers().get("Location").is_none());
@@ -340,8 +304,7 @@ mod tests {
             redirect_code: 301,
             health_path: Some("/healthz".to_string()),
         });
-        let req = make_request("/other");
-        let resp = handle(req, config).await.unwrap();
+        let resp = handle(State(config), make_request("/other")).await;
 
         assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
     }

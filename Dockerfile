@@ -27,13 +27,10 @@ COPY src ./src
 RUN touch src/main.rs && \
     case "$TARGETARCH" in \
         amd64) cargo build --release --target x86_64-unknown-linux-musl && \
-               strip target/x86_64-unknown-linux-musl/release/light-redirect && \
                cp target/x86_64-unknown-linux-musl/release/light-redirect /light-redirect ;; \
         arm64) cargo build --release --target aarch64-unknown-linux-musl && \
-               strip target/aarch64-unknown-linux-musl/release/light-redirect && \
                cp target/aarch64-unknown-linux-musl/release/light-redirect /light-redirect ;; \
         *)     cargo build --release --target x86_64-unknown-linux-musl && \
-               strip target/x86_64-unknown-linux-musl/release/light-redirect && \
                cp target/x86_64-unknown-linux-musl/release/light-redirect /light-redirect ;; \
     esac
 

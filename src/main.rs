@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, Response, StatusCode, Uri};
+use axum::http::{HeaderValue, Response, StatusCode};
 use axum::Router;
 use tokio::net::TcpListener;
 
@@ -170,6 +170,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Uri;
 
     #[test]
     fn resolve_code_valid_codes() {

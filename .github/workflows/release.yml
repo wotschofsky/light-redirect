@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-x86:
     name: Build (x86)
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -42,7 +42,7 @@ jobs:
 
   build-arm:
     name: Build (ARM)
-    runs-on: ubuntu-latest-arm
+    runs-on: ubicloud-standard-2-arm
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -72,7 +72,7 @@ jobs:
           cache-to: type=inline
 
   merge:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     needs: [build-x86, build-arm]
     steps:
       - name: Set up Docker Buildx
